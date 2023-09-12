@@ -1,12 +1,17 @@
-import unstoppableDomainsResolution from "@unstoppabledomains/resolution";
-import { hashDomain } from "./hashDomain";
-import { MemoryCache } from "./MemoryCache";
-import { MirrorNode, NetworkType } from "./mirrorNode";
-import { PollingTopicSubscriber } from "./topicSubscriber/pollingTopicSubscriber";
-import { ICache, NameHash, ResolverOptions, SecondLevelDomain, TopLevelDomain } from "./types";
+/* eslint-disable no-await-in-loop */
+import unstoppableDomainsResolution from '@unstoppabledomains/resolution';
+import { ContractInfoQuery } from '@hashgraph/sdk/lib/exports';
+import { hashDomain } from './hashDomain';
+import { MemoryCache } from './MemoryCache';
+import { MirrorNode, NetworkType } from './mirrorNode';
+import { PollingTopicSubscriber } from './topicSubscriber/pollingTopicSubscriber';
+import { ICache, NameHash, ResolverOptions, SecondLevelDomain, TopLevelDomain } from './types';
+import { HashgraphNames } from './archived';
+import { client } from './helpers/hashgraphSdkClient';
+import { getSldSmartContract, getTldSmartContract } from './smartContracts/getSmartContractService';
 
-export const TEST_TLD_TOPIC_ID = "0.0.48097305";
-export const MAIN_TLD_TOPIC_ID = "0.0.1234189";
+export const TEST_TLD_TOPIC_ID = '0.0.48097305';
+export const MAIN_TLD_TOPIC_ID = '0.0.1234189';
 
 export {
   ICache,
@@ -19,7 +24,7 @@ export {
   SecondLevelDomain,
   TopLevelDomain,
   ResolverOptions,
-} from "./types";
+} from './types';
 
 export class Resolver {
   mirrorNode: MirrorNode;
@@ -31,8 +36,8 @@ export class Resolver {
 
   isCaughtUpPromise: Promise<unknown> = Promise.resolve();
 
-  constructor(networkType: NetworkType, authKey = "", cache?: ICache, resolverOptions?: ResolverOptions) {
-    this.mirrorNode = new MirrorNode(networkType, authKey);
+  constructor(networkType: NetworkType, authHeader = '', authKey = '', cache?: ICache, resolverOptions?: ResolverOptions) {
+    this.mirrorNode = new MirrorNode(networkType, authHeader, authKey);
     if (!cache) {
       this.cache = new MemoryCache();
     } else {
@@ -75,49 +80,66 @@ export class Resolver {
    * @returns {Promise<AccountId>}
    */
   public async resolveSLD(domain: string): Promise<string | undefined> {
-    const isUnstoppableDomain = await this._unstoppableDomainsResolver?.isSupportedDomain(domain);
-    if (isUnstoppableDomain) return await this._unstoppableDomainsResolver?.addr(domain, 'HBAR');
+    // const isUnstoppableDomain = await this._unstoppableDomainsResolver?.isSupportedDomain(domain);
+    // if (isUnstoppableDomain) return await this._unstoppableDomainsResolver?.addr(domain, 'HBAR');
 
     const nameHash = hashDomain(domain);
-    const sld = await this.getSecondLevelDomain(nameHash);
-    if (sld) {
-      const [tokenId, serial] = sld.nftId.split(":");
-      const nft = await this.mirrorNode.getNFT(tokenId, serial);
-      return nft.account_id;
-    }
-    return Promise.resolve(undefined);
+    const domainTopicMessage = await this.getSldTopicMessage(nameHash);
+    const contractEVM = await this.getEvmContractAddress(domainTopicMessage.contractId);
+    const tldContractService = await getTldSmartContract(contractEVM);
+    const contractList = await tldContractService.getNodes();
+    const accountId = this.getAccountId(contractList, nameHash, domainTopicMessage.tokenId);
+
+    return Promise.resolve(accountId);
+    // const sld = await this.getSecondLevelDomain(nameHash);
+    // if (sld) {
+    //   const [tokenId, serial] = sld.nftId.split(':');
+    //   const nft = await this.mirrorNode.getNFT(tokenId, serial);
+    //   return nft.account_id;
+    // }
+    // return Promise.resolve(undefined);
   }
 
-  public async getAllDomainsForAccount(accountIdOrDomain: string): Promise<string[]> {
-    let accountId = accountIdOrDomain;
-    if (!accountIdOrDomain.startsWith('0.0.')) {
-      const accountIdFromDomain = await this.resolveSLD(accountIdOrDomain);
-      if (accountIdFromDomain) {
-        accountId = accountIdFromDomain;
-      } else {
-        return [];
-      }
+  public async getAllDomainsForAccount(accountId: string): Promise<string[]> {
+    // let accountId = accountIdOrDomain;
+    // if (!accountIdOrDomain.startsWith('0.0.')) {
+    //   const accountIdFromDomain = await this.resolveSLD(accountIdOrDomain);
+    //   if (accountIdFromDomain) {
+    //     accountId = accountIdFromDomain;
+    //   } else {
+    //     return [];
+    //   }
+    // }
+
+    const topicMessages = await this.mirrorNode.getTldTopicMessage();
+    const userNftLists = await this.mirrorNode.getAllUserHNSNfts(topicMessages, accountId);
+    const nftDataTopicMessages = await this.mirrorNode.getNftTopicMessages(topicMessages, userNftLists);
+    const final = [];
+    for (let index = 0; index < nftDataTopicMessages.length; index += 1) {
+      const currMsgInfo = JSON.parse(Buffer.from(nftDataTopicMessages[index].message, 'base64').toString());
+      const checkAccountId = await this.resolveSLD(currMsgInfo.nameHash.domain);
+      if (checkAccountId === accountId && Boolean(checkAccountId)) { final.push(currMsgInfo.nameHash.domain); }
     }
 
-    const tokenIds = await this.cache.getTokenIds();
-    if (tokenIds.length === 0) {
-      return [];
-    }
+    return final;
 
-    const nftInfos = await Promise.all(tokenIds.map(tokenId => {
-      return this.mirrorNode.getNFTsByAccountId(tokenId, accountId);
-    }));
+    // const tokenIds = await this.cache.getTokenIds();
+    // if (tokenIds.length === 0) {
+    //   return [];
+    // }
 
-    const slds = await Promise.all(nftInfos
-      .flat()
-      .map(o => this.cache.getSldByNftId(`${o.token_id}:${o.serial_number}`)));
-    return (slds.filter(sld => sld !== undefined) as SecondLevelDomain[]).map(sld => sld.nameHash.domain);
+    // const nftInfos = await Promise.all(tokenIds.map((tokenId) => this.mirrorNode.getNFTsByAccountId(tokenId, accountId)));
+
+    // const slds = await Promise.all(nftInfos
+    //   .flat()
+    //   .map((o) => this.cache.getSldByNftId(`${o.token_id}:${o.serial_number}`)));
+    // return (slds.filter((sld) => sld !== undefined) as SecondLevelDomain[]).map((sld) => sld.nameHash.domain);
   }
 
   // Private
 
   private getTldTopicId(): string {
-    if (this.mirrorNode.networkType.includes("test")) return TEST_TLD_TOPIC_ID;
+    if (this.mirrorNode.networkType.includes('test')) return TEST_TLD_TOPIC_ID;
     return MAIN_TLD_TOPIC_ID;
   }
 
@@ -133,7 +155,7 @@ export class Resolver {
           (messageObj) => {
             const decoded = Buffer.from(
               messageObj.message,
-              "base64"
+              'base64',
             ).toString();
             const tld = JSON.parse(decoded) as TopLevelDomain;
 
@@ -146,8 +168,9 @@ export class Resolver {
           },
           undefined,
           this.mirrorNode.authKey,
-          this._options
-        )
+          this.mirrorNode.authHeader,
+          this._options,
+        ),
       );
     });
   }
@@ -158,15 +181,15 @@ export class Resolver {
    * @returns {Promise<TLDTopicMessage>}
    */
   private async getTopLevelDomain(
-    nameHash: NameHash
+    nameHash: NameHash,
   ): Promise<TopLevelDomain | undefined> {
     while (!this._isCaughtUpWithTopic.get(this.getTldTopicId())) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
 
-    const tldHash = nameHash.tldHash.toString("hex");
+    const tldHash = nameHash.tldHash.toString('hex');
     const found = this.cache.hasTld(tldHash);
-    if (!found) throw new Error("TLD not found");
+    if (!found) throw new Error('TLD not found');
 
     return this.cache.getTld(tldHash)!;
   }
@@ -183,7 +206,7 @@ export class Resolver {
           async (messageObj) => {
             const decoded = Buffer.from(
               messageObj.message,
-              "base64"
+              'base64',
             ).toString();
             const sld = JSON.parse(decoded) as SecondLevelDomain;
 
@@ -191,11 +214,11 @@ export class Resolver {
               sld.sequenceNumber = messageObj.sequence_number;
             }
 
-            const tldHash = sld.nameHash.tldHash;
-            const sldHash = sld.nameHash.sldHash;
+            const { tldHash } = sld.nameHash;
+            const { sldHash } = sld.nameHash;
             if (await this.cache.hasTld(tldHash)) {
               const cachedSld = await Promise.resolve(
-                this.cache.getSld(tldHash, sldHash)!
+                this.cache.getSld(tldHash, sldHash)!,
               );
               // TODO: replace if the one in cache is expired
               if (!cachedSld) {
@@ -211,8 +234,9 @@ export class Resolver {
           },
           undefined,
           this.mirrorNode.authKey,
-          this._options
-        )
+          this.mirrorNode.authHeader,
+          this._options,
+        ),
       );
     });
   }
@@ -225,12 +249,12 @@ export class Resolver {
 
   // Improve method to look for unexpired domains
   public async getSecondLevelDomain(
-    nameHash: NameHash
+    nameHash: NameHash,
   ): Promise<SecondLevelDomain | undefined> {
     const tld = await this.getTopLevelDomain(nameHash);
     if (!tld) return undefined;
-    const tldHash = nameHash.tldHash.toString("hex");
-    const sldHash = nameHash.sldHash.toString("hex");
+    const tldHash = nameHash.tldHash.toString('hex');
+    const sldHash = nameHash.sldHash.toString('hex');
 
     let isCaughtUp = false;
     while (!isCaughtUp) {
@@ -243,7 +267,41 @@ export class Resolver {
 
     throw new Error(
       `SLD message for:[${nameHash.domain
-      }] not found on topic:[${tld.topicId.toString()}]`
+      }] not found on topic:[${tld.topicId.toString()}]`,
     );
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async getSldTopicMessage(nameHash:NameHash) {
+    const sldTopicMsg = await this.mirrorNode.getTopicMessage(nameHash);
+    return sldTopicMsg;
+  }
+
+  private async getEvmContractAddress(contractId:string) {
+    const evmAddress = this.mirrorNode.getContractEvmAddress(contractId);
+    return evmAddress;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async getAccountId(contractList:string[], nameHash: NameHash, tokenId: string) {
+    let foundData;
+    for (let index = 0; index < contractList.length; index += 1) {
+      const SLDcontracts = getSldSmartContract(contractList[index]);
+      const serial = await SLDcontracts.getSerial(`0x${Buffer.from(nameHash.sldHash).toString('hex')}`);
+      const dateExp = await SLDcontracts.getExpiry(`0x${Buffer.from(nameHash.sldHash).toString('hex')}`);
+      if (dateExp !== 0) {
+        const d = new Date(0);
+        d.setUTCSeconds(dateExp);
+        foundData = { serial, date: d };
+        break;
+      }
+    }
+
+    if (foundData && new Date() < foundData.date) {
+      const info = await this.mirrorNode.getNFT(tokenId, `${foundData?.serial}`);
+      return info.account_id;
+    }
+
+    return '';
   }
 }

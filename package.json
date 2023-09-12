@@ -1,5 +1,5 @@
 {
-  "name": "hashgraph-name-resolution-sdk",
+  "name": "hns-resolution-sdk",
   "version": "3.1.7",
   "description": "",
   "main": "dist/index.js",
@@ -12,16 +12,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pieFi-platform/hashgraph-name-resolution-sdk.git"
+    "url": "git+https://github.com/hedera-name-service/hns-resolution-sdk.git"
   },
   "author": "",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/pieFi-platform/hashgraph-name-resolution-sdk/issues"
+    "url": " https://github.com/hedera-name-service/hns-resolution-sdk/issues"
   },
-  "homepage": "https://github.com/pieFi-platform/hashgraph-name-resolution-sdk#readme",
+  "homepage": " https://github.com/hedera-name-service/hns-resolution-sdk#readme",
   "publishConfig": {
-    "@pieFi-platform:registry": "https://npm.pkg.github.com"
+    "@hedera-name-service:registry": "https://npm.pkg.github.com"
   },
   "devDependencies": {
     "@types/jest": "^29.2.5",

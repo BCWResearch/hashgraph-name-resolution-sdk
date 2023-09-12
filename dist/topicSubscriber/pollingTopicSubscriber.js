@@ -20,42 +20,42 @@ const executeWithRetriesAsync = async (func, shouldRetry, maxRetries = 5) => {
             retryNum++;
         }
     }
-    throw new Error("Reached maximum retries and did not rethrow error... Should not have gotten here.");
+    throw new Error('Reached maximum retries and did not rethrow error... Should not have gotten here.');
 };
 exports.executeWithRetriesAsync = executeWithRetriesAsync;
-const sendGetRequest = async (url, authKey) => {
-    return await (0, exports.executeWithRetriesAsync)(async (retryNum) => {
-        // Backoff retry for each failed attempt
-        await new Promise(resolve => setTimeout(resolve, retryNum * 250));
-        const headers = {};
-        if (authKey) {
-            headers['Authorization'] = authKey;
-        }
-        const res = await axios_1.default.get(url, {
-            headers
-        });
-        return res.data;
-    }, () => true);
-};
+const sendGetRequest = async (url, authKey, authHeader = '', networkType) => (0, exports.executeWithRetriesAsync)(async (retryNum) => {
+    // Backoff retry for each failed attempt
+    await new Promise((resolve) => setTimeout(resolve, retryNum * 250));
+    const headers = {};
+    if (authKey) {
+        headers.Authorization = authKey;
+    }
+    const res = networkType === 'arkhia_main' ? await axios_1.default.get(url, {
+        headers: { [authHeader]: authKey },
+    }) : await axios_1.default.get(url);
+    return res.data;
+}, () => true);
 class PollingTopicSubscriber {
-    static subscribe(networkType, topicId, onMessage, onCaughtUp, startingTimestamp = `000`, authKey, options) {
+    static subscribe(networkType, topicId, onMessage, onCaughtUp, startingTimestamp = '000', authKey, authHeader, options) {
         const pollingInterval = options && options.pollingInterval ? options.pollingInterval : 60 * 1000;
         let lastTimestamp = startingTimestamp;
         let calledOnCaughtUp = false;
         let cancelled = false;
         const promise = new Promise(async (resolve) => {
-            const latestMessageUrl = `${(0, mirrorNode_1.getBaseUrl)(networkType)}/api/v1/topics/${topicId}/messages/?limit=1&order=desc`;
-            const latestMessageResponse = await sendGetRequest(latestMessageUrl, authKey);
+            //   const latestMessageUrl = `${getBaseUrl(networkType)}/api/v1/topics/${topicId}/messages`;
+            const latestMessageUrl = `${(0, mirrorNode_1.getBaseUrl)(networkType)}/api/v1/topics/${topicId}/messages?limit=1&order=desc`;
+            const latestMessageResponse = await sendGetRequest(latestMessageUrl, authKey, authHeader);
             let latestSequenceNumber = 0;
             if (latestMessageResponse.messages.length) {
                 latestSequenceNumber = latestMessageResponse.messages[0].sequence_number;
             }
             while (!cancelled) {
-                const url = `${(0, mirrorNode_1.getBaseUrl)(networkType)}/api/v1/topics/${topicId}/messages/?limit=${mirrorNode_1.MAX_PAGE_SIZE}&timestamp=gt:${lastTimestamp}`;
-                const response = await sendGetRequest(url, authKey).catch((err) => {
+                // const url = `${getBaseUrl(networkType)}/api/v1/topics/${topicId}/messages`;
+                const url = `${(0, mirrorNode_1.getBaseUrl)(networkType)}/api/v1/topics/${topicId}/messages?limit=${mirrorNode_1.MAX_PAGE_SIZE}&timestamp=gt:${lastTimestamp}`;
+                const response = await sendGetRequest(url, authKey, authHeader).catch((err) => {
                     console.error({
                         err,
-                        message: err.message
+                        message: err.message,
                     });
                 });
                 if (!response) {
@@ -78,8 +78,8 @@ class PollingTopicSubscriber {
                 }
                 if (messages.length === 0) {
                     await new Promise((resolve) => {
-                        let intervalHandle = undefined;
-                        let timeoutHandle = undefined;
+                        let intervalHandle;
+                        let timeoutHandle;
                         // This interval allows the promise to resolve early if the subscription is cancelled
                         intervalHandle = setInterval(() => {
                             if (cancelled) {
@@ -106,6 +106,5 @@ class PollingTopicSubscriber {
             await promise;
         };
     }
-    ;
 }
 exports.PollingTopicSubscriber = PollingTopicSubscriber;
