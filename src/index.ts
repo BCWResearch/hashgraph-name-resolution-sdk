@@ -80,8 +80,8 @@ export class Resolver {
    * @returns {Promise<AccountId>}
    */
   public async resolveSLD(domain: string): Promise<string | undefined> {
-    // const isUnstoppableDomain = await this._unstoppableDomainsResolver?.isSupportedDomain(domain);
-    // if (isUnstoppableDomain) return await this._unstoppableDomainsResolver?.addr(domain, 'HBAR');
+    const isUnstoppableDomain = await this._unstoppableDomainsResolver?.isSupportedDomain(domain);
+    if (isUnstoppableDomain) return Promise.resolve(this._unstoppableDomainsResolver?.addr(domain, 'HBAR'));
 
     const nameHash = hashDomain(domain);
     const domainTopicMessage = await this.getSldTopicMessage(nameHash);
@@ -134,6 +134,36 @@ export class Resolver {
     //   .flat()
     //   .map((o) => this.cache.getSldByNftId(`${o.token_id}:${o.serial_number}`)));
     // return (slds.filter((sld) => sld !== undefined) as SecondLevelDomain[]).map((sld) => sld.nameHash.domain);
+  }
+
+  /**
+   * @description Get the sld message on the TLD topic for a given nameHash
+   * @param nameHash: {NameHash} The nameHash for the sld to query
+   * @returns {Promise<SecondLevelDomain>}
+   */
+
+  // Improve method to look for unexpired domains
+  public async getSecondLevelDomain(
+    nameHash: NameHash,
+  ): Promise<SecondLevelDomain | undefined> {
+    const tld = await this.getTopLevelDomain(nameHash);
+    if (!tld) return undefined;
+    const tldHash = nameHash.tldHash.toString('hex');
+    const sldHash = nameHash.sldHash.toString('hex');
+
+    let isCaughtUp = false;
+    while (!isCaughtUp) {
+      isCaughtUp = this._isCaughtUpWithTopic.get(tld.topicId)!;
+      if (await this.cache.hasSld(tldHash, sldHash)) {
+        return this.cache.getSld(tldHash, sldHash)!;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    throw new Error(
+      `SLD message for:[${nameHash.domain
+      }] not found on topic:[${tld.topicId.toString()}]`,
+    );
   }
 
   // Private
@@ -239,36 +269,6 @@ export class Resolver {
         ),
       );
     });
-  }
-
-  /**
-   * @description Get the sld message on the TLD topic for a given nameHash
-   * @param nameHash: {NameHash} The nameHash for the sld to query
-   * @returns {Promise<SecondLevelDomain>}
-   */
-
-  // Improve method to look for unexpired domains
-  public async getSecondLevelDomain(
-    nameHash: NameHash,
-  ): Promise<SecondLevelDomain | undefined> {
-    const tld = await this.getTopLevelDomain(nameHash);
-    if (!tld) return undefined;
-    const tldHash = nameHash.tldHash.toString('hex');
-    const sldHash = nameHash.sldHash.toString('hex');
-
-    let isCaughtUp = false;
-    while (!isCaughtUp) {
-      isCaughtUp = this._isCaughtUpWithTopic.get(tld.topicId)!;
-      if (await this.cache.hasSld(tldHash, sldHash)) {
-        return this.cache.getSld(tldHash, sldHash)!;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-
-    throw new Error(
-      `SLD message for:[${nameHash.domain
-      }] not found on topic:[${tld.topicId.toString()}]`,
-    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
